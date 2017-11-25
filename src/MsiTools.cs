@@ -4,6 +4,7 @@ using System.IO;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.Interop;
+using System.Reflection;
 
 
 namespace MsiTools
@@ -129,6 +130,36 @@ namespace MsiTools
             return reply;
         }
 
+        public Dictionary<string, string> ProductInfo
+        {
+            get
+            {
+                Dictionary<string, string> reply = new Dictionary<string, string>();
+
+                FieldInfo[] fields = typeof(InstallProperty).GetFields();
+                foreach (FieldInfo fi in fields)
+                {
+                    if (fi.IsStatic && fi.IsPublic && fi.IsInitOnly)
+                    {
+                        InstallProperty property = (InstallProperty)fi.GetValue(null);
+                        try
+                        {
+                            reply[property.ToString()] = GetProductInfo(property);
+                        }
+                        catch (MsiException e)
+                        {
+                            if (e.ErrorCode != ResultWin32.ERROR_UNKNOWN_PROPERTY)
+                            {
+                                throw;
+                            }
+                        }
+                    }
+                }
+
+                return reply;
+            }
+        }
+
         public string GetProductInfo(InstallProperty property)
         {
             if (productInfo == null)
@@ -157,7 +188,7 @@ namespace MsiTools
                 buf = new StringBuilder(10);
             }
             Int32 len = buf.Capacity;
-            UInt32 status = MsiGetProductInfo(productCode.ToString("B"), property, buf, ref len);
+            Int32 status = MsiGetProductInfo(productCode.ToString("B"), property, buf, ref len);
             if (status == ResultWin32.ERROR_SUCCESS)
             {
                 return buf.ToString();
@@ -170,27 +201,45 @@ namespace MsiTools
                 return GetProductInfo(property, buf);
             }
 
-            Helper.ReportWinAPICallFailure("MsiGetProductInfo(" + productCode + ", " + property + ", " + len + ")", status);
+            Helper.ReportMsiCallFailure("MsiGetProductInfo(" + productCode + ", " + property + ", " + len + ")", status);
             return null;
         }
         
         [DllImport("msi.dll", CharSet=CharSet.Unicode)]
-        static extern UInt32 MsiGetProductInfo(string product, string property, [Out] StringBuilder valueBuf, ref Int32 len); 
+        static extern Int32 MsiGetProductInfo(string product, string property, [Out] StringBuilder valueBuf, ref Int32 len); 
+    }
+
+    public class MsiException : SystemException
+    {
+        private int status;
+
+        public MsiException(string msg, int status): base(msg)
+        {
+            this.status = status;
+        }
+
+        public int ErrorCode
+        {
+            get
+            {
+                return status;
+            }
+        }
     }
 
     internal static class Helper
     {
-        public static void ReportWinAPICallFailure(string funcCall, uint status)
+        public static void ReportMsiCallFailure(string funcCall, int status)
         {
             StringBuilder errMsg = new StringBuilder("Error calling " + funcCall + " WIN API occured. Error: " + status);
 
-            string errName = ResultWin32.GetErrorName((int)status);
+            string errName = ResultWin32.GetErrorName(status);
             if (errName != String.Empty)
             {
                 errMsg.Append(" (" + errName + ")");
             }
 
-            throw new SystemException(errMsg.ToString());
+            throw new MsiException(errMsg.ToString(), status);
         }
     }
 
@@ -229,7 +278,7 @@ namespace MsiTools
 
         bool System.Collections.IEnumerator.MoveNext()
         {
-            UInt32 status = MsiEnumProducts(position++, curentProductCode);
+            Int32 status = MsiEnumProducts(position++, curentProductCode);
             switch ((int)status)
             {
                 case ResultWin32.ERROR_NO_MORE_ITEMS:
@@ -240,7 +289,7 @@ namespace MsiTools
                     return true;
 
                 default:
-                    Helper.ReportWinAPICallFailure("MsiEnumProducts(" + (position - 1) + ")", status);
+                    Helper.ReportMsiCallFailure("MsiEnumProducts(" + (position - 1) + ")", status);
                     return false;
             }
         }
@@ -255,7 +304,7 @@ namespace MsiTools
         private InstalledProduct currentValue;
 
         [DllImport("msi.dll", CharSet = CharSet.Unicode)]
-        private static extern UInt32 MsiEnumProducts(UInt32 iProductIndex, [Out] StringBuilder lpProductBuf);
+        private static extern Int32 MsiEnumProducts(UInt32 iProductIndex, [Out] StringBuilder lpProductBuf);
     }
 
     public class Products : IEnumerable<InstalledProduct>
